@@ -1,0 +1,98 @@
+from langgraph.graph import StateGraph,START,END
+from langgraph.prebuilt import ToolNode
+from langchain_core.tools import tool
+from langchain_anthropic import Chatanthropic 
+from langchain_core.messages import HumanMessage
+from typing import TypedDict , Annotated
+from langgraph.graph.message import add_messages
+
+
+# Step 1 tool banao :- 
+
+@tool
+
+def add_numbers (a:int ,b : int ) ->int :
+    """do number ko jodta hai """
+    return a + b 
+
+
+def multiply_numbers ( a : int , b : int) -> int : 
+
+    """ do number ko multiply karta hai """
+
+    return a * b 
+
+tools = [add_numbers,multiply_numbers]
+
+
+#  Step 2  State Design ( message field jaruri hai Agent ke liye )
+
+class AgentState (TypedDict):
+    messages : Annotated [list, add_messages]
+
+
+
+# step 3 :- LLM banao or tool bind karo :-   
+
+llm = Chatanthropic (model  = "claude-sonnet-4-6")
+llm_with_tools = llm.bind_tools(tools)
+
+
+# Step 4 :- LLm - node , ye "sochta" hai :- 
+def llm_node(state:AgentState) -> AgentState:
+    response = llm_with_tools.invoke(state["messages"])
+
+    return{"messages": [response]}
+
+
+# Step 5 :- Tool Node , LnagGraph ka pre - build helper ( khud tool chalata hai )
+
+tool_node = ToolNode(tools)
+
+
+# Step 6 :- Decision Function  - "Tool chayee ya nahi ?"
+
+def should_continue(state:AgentState) -> str :
+    last_message = state["messages"] [-1]
+    if last_message.tool_calls:                # Agar llm nai tool managa hai 
+        return "use_tool"
+    else:
+        return "khatam "                       # Nahi toh jawab final hai 
+    
+
+
+
+# step 7 :- Graph banao 
+
+graph = StateGraph(AgentState)
+graph.add_node("llm",llm_node)
+graph.add_node("tools",tool_node)
+
+graph.add_edge(START,"llm")
+
+
+
+#conditional edge -- decide karo tool chayee ya nahi 
+
+graph.add_conditional_edges(
+    "llm",
+    should_continue,
+    {
+        "use_tools", "tools",
+        "khatam"   , END
+    }
+)
+
+
+# Loop  :- Tool chalane ke baad vapas node pr jao 
+graph.add_edge("tools", "llm")
+
+app = graph.compile()
+
+# Test karte hain!
+result = app.invoke({
+    "messages": [HumanMessage(content="5 aur 10 ko jodo, phir usse 3 se multiply karo")]
+})
+
+# Final answer print karo
+print(result["messages"][-1].content)
